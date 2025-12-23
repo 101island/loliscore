@@ -1,0 +1,25 @@
+{
+	"name": "loliscore",
+	"version": "0.0.0",
+	"private": true,
+	"scripts": {
+		"deploy": "wrangler deploy",
+		"dev": "wrangler dev",
+		"start": "wrangler dev",
+		"cf-typegen": "wrangler types",
+		"check": "biome check --write .",
+		"format": "biome format --write ."
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.3.10",
+		"@cloudflare/vitest-pool-workers": "^0.8.19",
+		"@types/bcryptjs": "^3.0.0",
+		"typescript": "^5.5.2",
+		"vitest": "~3.2.0",
+		"wrangler": "^4.56.0"
+	},
+	"dependencies": {
+		"bcryptjs": "^3.0.3",
+		"hono": "^4.11.1"
+	}
+}
