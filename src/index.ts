@@ -33,5 +33,5 @@ app.route('/api', auth);
 app.route('/api', user);
 app.route('/api/internal/bot', internal);
 
-export { VerificationDO } from './do/VerificationDO';
+export { VerificationDO } from './do/verification';
 export default app;

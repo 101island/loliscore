@@ -9,7 +9,7 @@
 	"durable_objects": {
 		"bindings": [
 			{
-				"name": "VERIFICATION",
+				"name": "VERIFICATION_DO",
 				"class_name": "VerificationDO"
 			}
 		]
@@ -17,9 +17,7 @@
 	"migrations": [
 		{
 			"tag": "v1",
-			"new_sqlite_classes": [
-				"VerificationDO"
-			]
+			"new_sqlite_classes": ["VerificationDO"]
 		}
 	],
 	"workers_dev": false,

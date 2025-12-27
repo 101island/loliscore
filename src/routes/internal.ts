@@ -17,8 +17,8 @@ internal.post('/verify', async (c) => {
 	const { qq, code } = await c.req.json();
 	if (!qq || !code) return errorResp(c, 400, 'QQ and Code required');
 
-	const id = c.env.VERIFICATION.idFromName(qq);
-	const obj = c.env.VERIFICATION.get(id);
+	const id = c.env.VERIFICATION_DO.idFromName(qq);
+	const obj = c.env.VERIFICATION_DO.get(id);
 	const resp = await obj.fetch('http://do/verify', {
 		method: 'POST',
 		body: JSON.stringify({ code }),

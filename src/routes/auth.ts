@@ -18,8 +18,8 @@ auth.post('/register', async (c) => {
 	// Verify QQ if provided
 	if (qq) {
 		// Check verified status in DO
-		const id = c.env.VERIFICATION.idFromName(qq);
-		const obj = c.env.VERIFICATION.get(id);
+		const id = c.env.VERIFICATION_DO.idFromName(qq);
+		const obj = c.env.VERIFICATION_DO.get(id);
 		const doResp = await obj.fetch('http://do/status');
 		const { status } = (await doResp.json()) as { status: string };
 
@@ -70,8 +70,8 @@ auth.post('/auth/qq/start', async (c) => {
 	const code = Math.floor(100000 + Math.random() * 900000).toString();
 
 	// Store in DO
-	const id = c.env.VERIFICATION.idFromName(qq);
-	const obj = c.env.VERIFICATION.get(id);
+	const id = c.env.VERIFICATION_DO.idFromName(qq);
+	const obj = c.env.VERIFICATION_DO.get(id);
 	await obj.fetch('http://do/start', {
 		method: 'POST',
 		body: JSON.stringify({ code }),
@@ -86,8 +86,8 @@ auth.get('/auth/qq/status', async (c) => {
 	if (!qq) return errorResp(c, 400, 'QQ is required');
 
 	// Check verified in DO
-	const id = c.env.VERIFICATION.idFromName(qq);
-	const obj = c.env.VERIFICATION.get(id);
+	const id = c.env.VERIFICATION_DO.idFromName(qq);
+	const obj = c.env.VERIFICATION_DO.get(id);
 	const doResp = await obj.fetch('http://do/status');
 	const { status } = (await doResp.json()) as { status: string };
 

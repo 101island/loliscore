@@ -34,7 +34,7 @@ export class VerificationDO extends DurableObject {
 				resolve(
 					new Response(verifiedResponse, {
 						headers: { 'Content-Type': 'application/json' },
-					})
+					}),
 				);
 			});
 			this.statusResolvers = [];
@@ -62,7 +62,7 @@ export class VerificationDO extends DurableObject {
 						resolve(
 							new Response(JSON.stringify({ status: 'pending' }), {
 								headers: { 'Content-Type': 'application/json' },
-							})
+							}),
 						);
 					}
 				}, 30000);
@@ -76,7 +76,7 @@ export class VerificationDO extends DurableObject {
 				resolve(
 					new Response(JSON.stringify({ status: 'pending' }), {
 						headers: { 'Content-Type': 'application/json' },
-					})
+					}),
 				);
 			});
 			this.statusResolvers = [];
@@ -92,7 +92,7 @@ export class VerificationDO extends DurableObject {
 			resolve(
 				new Response(JSON.stringify({ status: 'pending' }), {
 					headers: { 'Content-Type': 'application/json' },
-				})
+				}),
 			);
 		});
 		this.statusResolvers = [];

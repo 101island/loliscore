@@ -2,7 +2,7 @@ export type Bindings = {
 	DB: D1Database;
 
 	QBOT_TOKEN: string;
-	VERIFICATION: DurableObjectNamespace;
+	VERIFICATION_DO: DurableObjectNamespace;
 };
 
 export type User = {
