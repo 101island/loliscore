@@ -38,6 +38,28 @@ auth.post('/register', async (c) => {
 			.bind(username, hashedPassword, qq || null)
 			.run();
 
+		// If QQ is provided, fetch avatar and upload to R2
+		if (qq) {
+			c.executionCtx.waitUntil(
+				(async () => {
+					try {
+						const avatarUrl = `https://q.qlogo.cn/headimg_dl?dst_uin=${qq}&spec=640&img_type=jpg`;
+						const resp = await fetch(avatarUrl);
+						if (resp.ok) {
+							const buffer = await resp.arrayBuffer();
+							const key = `avatars/${username}`;
+							await c.env.BUCKET.put(key, buffer, {
+								httpMetadata: { contentType: resp.headers.get('Content-Type') || 'image/jpeg' },
+							});
+							await c.env.DB.prepare(`UPDATE users SET avatar = ? WHERE username = ?`).bind(key, username).run();
+						}
+					} catch (e) {
+						console.error('Failed to fetch/upload QQ avatar', e);
+					}
+				})(),
+			);
+		}
+
 		return c.json({ message: 'User registered successfully', username });
 	} catch (e: unknown) {
 		if (e instanceof Error && e.message?.includes('UNIQUE')) {

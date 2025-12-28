@@ -34,5 +34,11 @@
 			"database_name": "loliscore-db",
 			"database_id": "572119d8-ab9d-4dc7-87ec-f5bb1aabcabb"
 		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "BUCKET",
+			"bucket_name": "lolisland-avatars"
+		}
 	]
 }
