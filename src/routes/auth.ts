@@ -58,7 +58,13 @@ auth.post('/login', async (c) => {
 	const valid = await compare(password, user.password || '');
 	if (!valid) return errorResp(c, 401, 'Invalid username or password');
 
-	const token = await sign({ user_id: user.username, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 }, JWT_SECRET);
+	const token = await sign(
+		{
+			user_id: user.username,
+			exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24,
+		},
+		JWT_SECRET,
+	);
 	return c.json({ token, qq: user.qq });
 });
 
@@ -98,12 +104,23 @@ auth.get('/auth/qq/status', async (c) => {
 	// Check if already registered
 	const user = await c.env.DB.prepare(`SELECT * FROM users WHERE qq = ?`).bind(qq).first<User>();
 	if (user) {
-		const token = await sign({ user_id: user.username, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 }, JWT_SECRET);
+		const token = await sign(
+			{
+				user_id: user.username,
+				exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24,
+			},
+			JWT_SECRET,
+		);
 
 		// Cleanup DO
 		await obj.fetch('http://do/', { method: 'DELETE' });
 
-		return c.json({ status: 'authenticated', token, is_registered: true, qq: user.qq });
+		return c.json({
+			status: 'authenticated',
+			token,
+			is_registered: true,
+			qq: user.qq,
+		});
 	}
 
 	return c.json({ status: 'verified', is_registered: false });
