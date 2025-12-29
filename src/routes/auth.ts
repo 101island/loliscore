@@ -2,7 +2,7 @@ import { compare, hash } from 'bcryptjs';
 import { Hono } from 'hono';
 import { sign } from 'hono/jwt';
 import type { Bindings, User } from '../types';
-import { errorResp, JWT_SECRET } from '../utils';
+import { errorResp, getHash, JWT_SECRET } from '../utils';
 
 const auth = new Hono<{ Bindings: Bindings }>();
 
@@ -47,11 +47,14 @@ auth.post('/register', async (c) => {
 						const resp = await fetch(avatarUrl);
 						if (resp.ok) {
 							const buffer = await resp.arrayBuffer();
-							const key = `avatars/${username}`;
+							const hash = await getHash(buffer);
+							const key = `avatar/${hash}`;
 							await c.env.BUCKET.put(key, buffer, {
-								httpMetadata: { contentType: resp.headers.get('Content-Type') || 'image/jpeg' },
+								httpMetadata: {
+									contentType: resp.headers.get('Content-Type') || 'image/jpeg',
+								},
 							});
-							await c.env.DB.prepare(`UPDATE users SET avatar = ? WHERE username = ?`).bind(key, username).run();
+							await c.env.DB.prepare(`UPDATE users SET avatar = ? WHERE username = ?`).bind(hash, username).run();
 						}
 					} catch (e) {
 						console.error('Failed to fetch/upload QQ avatar', e);

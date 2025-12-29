@@ -38,7 +38,7 @@
 	"r2_buckets": [
 		{
 			"binding": "BUCKET",
-			"bucket_name": "lolisland-avatars"
+			"bucket_name": "lolisland-r2"
 		}
 	]
 }

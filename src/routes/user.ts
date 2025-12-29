@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { verify } from 'hono/jwt';
 import type { Bindings, User } from '../types';
-import { errorResp, JWT_SECRET } from '../utils';
+import { errorResp, getHash, JWT_SECRET } from '../utils';
 
 const user = new Hono<{ Bindings: Bindings }>();
 
@@ -25,36 +25,86 @@ user.get('/me', async (c) => {
 
 // List Users
 user.get('/users', async (c) => {
-	const users = await c.env.DB.prepare(`SELECT username, qq FROM users`).all<User>();
-	const list = users.results.map((u) => ({
-		name: u.username,
-		id: u.username, // Using username as ID
-		// link: u.link // Not in DB yet
-	}));
+	const users = await c.env.DB.prepare(`SELECT username, qq, avatar FROM users`).all<User>();
 
-	return c.json(list);
+	// Process avatars in parallel to ensure all have hashes
+	const processedUsers = await Promise.all(
+		users.results.map(async (u) => {
+			let avatar = u.avatar;
+
+			// Check if avatar is valid hash (16 hex chars)
+			const isValidHash = avatar && /^[0-9a-f]{16}$/.test(avatar);
+
+			// If invalid/missing and we have QQ, try to restore
+			if (!isValidHash && u.qq) {
+				try {
+					const avatarUrl = `https://q.qlogo.cn/headimg_dl?dst_uin=${u.qq}&spec=640&img_type=jpg`;
+					const resp = await fetch(avatarUrl, {
+						headers: { 'User-Agent': 'Mozilla/5.0' },
+					});
+
+					if (resp.ok) {
+						const buffer = await resp.arrayBuffer();
+						const hash = await getHash(buffer);
+						const key = `avatar/${hash}`;
+
+						// Upload to R2 and update DB if different (or if it was missing)
+						// We do this in parallel to not block too much, but for the returned list we want the hash
+						await c.env.BUCKET.put(key, buffer, {
+							httpMetadata: {
+								contentType: resp.headers.get('Content-Type') || 'image/jpeg',
+							},
+						});
+
+						// Update DB
+						await c.env.DB.prepare(`UPDATE users SET avatar = ? WHERE username = ?`).bind(hash, u.username).run();
+
+						avatar = hash;
+					}
+				} catch (e) {
+					console.error(`Failed to auto-migrate avatar for ${u.username}`, e);
+				}
+			}
+
+			return {
+				name: u.username,
+				id: avatar, // Now should be hash if successful
+			};
+		}),
+	);
+
+	return c.json(processedUsers);
 });
 
-// Avatar Proxy
-user.get('/user/avatar/:username', async (c) => {
-	const username = c.req.param('username');
+// Avatar Proxy or Direct Access
+user.get('/user/avatar/:id', async (c) => {
+	const id = c.req.param('id');
 
 	try {
-		const user = await c.env.DB.prepare(`SELECT username, qq, avatar FROM users WHERE username = ?`).bind(username).first<User>();
+		// 1. Try fetching from R2 directly using the ID (hash)
+		// If ID is a hash, key is `avatar/<hash>`
+		// If ID is legacy path (e.g. avatars/username), key is `avatar/avatars/username` (likely 404, triggers fallback)
+		const key = `avatar/${id}`;
+		const object = await c.env.BUCKET.get(key);
 
-		if (!user) {
-			return errorResp(c, 404, 'User not found');
+		if (object) {
+			const headers = new Headers();
+			object.writeHttpMetadata(headers);
+			headers.set('etag', object.httpEtag);
+			return new Response(object.body, { headers });
 		}
 
-		// Try R2 if avatar is set
-		if (user.avatar) {
-			const object = await c.env.BUCKET.get(user.avatar);
-			if (object) {
-				const headers = new Headers();
-				object.writeHttpMetadata(headers);
-				headers.set('etag', object.httpEtag);
-				return new Response(object.body, { headers });
-			}
+		// 2. If not found in R2, it might be a legacy ID or a missing upload.
+		// We try to resolve the user by matching avatar field OR username (as a fallback/convenience)
+
+		// If ID is a legacy path `avatars/username`, it matches `avatar` column.
+		// If ID is a username (legacy client?), it matches `username` column.
+		const user = await c.env.DB.prepare(`SELECT username, qq, avatar FROM users WHERE avatar = ? OR username = ?`)
+			.bind(id, id)
+			.first<User>();
+
+		if (!user) {
+			return errorResp(c, 404, 'Avatar not found');
 		}
 
 		// Fallback to QQ if available (and lazy upload)
@@ -70,13 +120,16 @@ user.get('/user/avatar/:username', async (c) => {
 
 			// Lazy upload to R2
 			const buffer = await resp.clone().arrayBuffer();
-			const key = `avatars/${username}`;
+			const hash = await getHash(buffer);
+			const newKey = `avatar/${hash}`;
 			c.executionCtx.waitUntil(
 				(async () => {
-					await c.env.BUCKET.put(key, buffer, {
-						httpMetadata: { contentType: resp.headers.get('Content-Type') || 'image/jpeg' },
+					await c.env.BUCKET.put(newKey, buffer, {
+						httpMetadata: {
+							contentType: resp.headers.get('Content-Type') || 'image/jpeg',
+						},
 					});
-					await c.env.DB.prepare(`UPDATE users SET avatar = ? WHERE username = ?`).bind(key, username).run();
+					await c.env.DB.prepare(`UPDATE users SET avatar = ? WHERE username = ?`).bind(hash, user.username).run();
 				})(),
 			);
 
@@ -92,7 +145,7 @@ user.get('/user/avatar/:username', async (c) => {
 
 		return errorResp(c, 404, 'Avatar not found');
 	} catch (e: unknown) {
-		console.error(`Error fetching avatar for ${username}:`, e);
+		console.error(`Error fetching avatar for ${id}:`, e);
 		return errorResp(c, 500, `Internal Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
 	}
 });
@@ -123,12 +176,14 @@ user.put('/user/avatar', async (c) => {
 		return errorResp(c, 400, 'File too large (max 5MB)');
 	}
 
-	const key = `avatars/${username}`;
-	await c.env.BUCKET.put(key, await file.arrayBuffer(), {
+	const buffer = await file.arrayBuffer();
+	const hash = await getHash(buffer);
+	const key = `avatar/${hash}`;
+	await c.env.BUCKET.put(key, buffer, {
 		httpMetadata: { contentType: file.type },
 	});
 
-	await c.env.DB.prepare(`UPDATE users SET avatar = ? WHERE username = ?`).bind(key, username).run();
+	await c.env.DB.prepare(`UPDATE users SET avatar = ? WHERE username = ?`).bind(hash, username).run();
 
 	return c.json({ message: 'Avatar uploaded successfully', key });
 });
