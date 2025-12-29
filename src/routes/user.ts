@@ -14,7 +14,7 @@ user.get('/me', async (c) => {
 	try {
 		const payload = await verify(token, JWT_SECRET);
 		// username is now PK
-		const user = await c.env.DB.prepare(`SELECT username, qq FROM users WHERE username = ?`).bind(payload.user_id).first<User>();
+		const user = await c.env.DB.prepare(`SELECT username, qq, avatar FROM users WHERE username = ?`).bind(payload.user_id).first<User>();
 		if (!user) return errorResp(c, 404, 'User not found');
 
 		return c.json(user);
@@ -80,10 +80,13 @@ user.get('/users', async (c) => {
 user.get('/user/avatar/:id', async (c) => {
 	const id = c.req.param('id');
 
+	// STRICT CHECK: id must be 16-char hex
+	if (!/^[0-9a-f]{16}$/.test(id)) {
+		return errorResp(c, 400, 'Invalid avatar hash');
+	}
+
 	try {
 		// 1. Try fetching from R2 directly using the ID (hash)
-		// If ID is a hash, key is `avatar/<hash>`
-		// If ID is legacy path (e.g. avatars/username), key is `avatar/avatars/username` (likely 404, triggers fallback)
 		const key = `avatar/${id}`;
 		const object = await c.env.BUCKET.get(key);
 
@@ -94,53 +97,41 @@ user.get('/user/avatar/:id', async (c) => {
 			return new Response(object.body, { headers });
 		}
 
-		// 2. If not found in R2, it might be a legacy ID or a missing upload.
-		// We try to resolve the user by matching avatar field OR username (as a fallback/convenience)
+		// 2. If not found in R2, verify it exists in DB
+		const user = await c.env.DB.prepare(`SELECT username, qq, avatar FROM users WHERE avatar = ?`).bind(id).first<User>();
 
-		// If ID is a legacy path `avatars/username`, it matches `avatar` column.
-		// If ID is a username (legacy client?), it matches `username` column.
-		const user = await c.env.DB.prepare(`SELECT username, qq, avatar FROM users WHERE avatar = ? OR username = ?`)
-			.bind(id, id)
-			.first<User>();
-
-		if (!user) {
-			return errorResp(c, 404, 'Avatar not found');
-		}
-
-		// Fallback to QQ if available (and lazy upload)
-		if (user.qq) {
+		if (user?.qq) {
+			// Restore avatar from QQ if local hash matches
 			const avatarUrl = `https://q.qlogo.cn/headimg_dl?dst_uin=${user.qq}&spec=640&img_type=jpg`;
 			const resp = await fetch(avatarUrl, {
 				headers: { 'User-Agent': 'Mozilla/5.0' },
 			});
 
-			if (!resp.ok) {
-				return errorResp(c, 502, 'Failed to fetch avatar from QQ');
-			}
+			if (resp.ok) {
+				const buffer = await resp.clone().arrayBuffer();
+				const hash = await getHash(buffer);
 
-			// Lazy upload to R2
-			const buffer = await resp.clone().arrayBuffer();
-			const hash = await getHash(buffer);
-			const newKey = `avatar/${hash}`;
-			c.executionCtx.waitUntil(
-				(async () => {
-					await c.env.BUCKET.put(newKey, buffer, {
-						httpMetadata: {
-							contentType: resp.headers.get('Content-Type') || 'image/jpeg',
+				if (hash === id) {
+					const newKey = `avatar/${hash}`;
+					c.executionCtx.waitUntil(
+						(async () => {
+							await c.env.BUCKET.put(newKey, buffer, {
+								httpMetadata: {
+									contentType: resp.headers.get('Content-Type') || 'image/jpeg',
+								},
+							});
+						})(),
+					);
+					return new Response(resp.body, {
+						status: 200,
+						headers: {
+							'Content-Type': resp.headers.get('Content-Type') || 'image/jpeg',
+							'Cache-Control': 'public, max-age=3600',
+							'Access-Control-Allow-Origin': '*',
 						},
 					});
-					await c.env.DB.prepare(`UPDATE users SET avatar = ? WHERE username = ?`).bind(hash, user.username).run();
-				})(),
-			);
-
-			return new Response(resp.body, {
-				status: 200,
-				headers: {
-					'Content-Type': resp.headers.get('Content-Type') || 'image/jpeg',
-					'Cache-Control': 'public, max-age=3600',
-					'Access-Control-Allow-Origin': '*',
-				},
-			});
+				}
+			}
 		}
 
 		return errorResp(c, 404, 'Avatar not found');

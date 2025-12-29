@@ -90,7 +90,7 @@ auth.post('/login', async (c) => {
 		},
 		JWT_SECRET,
 	);
-	return c.json({ token, qq: user.qq });
+	return c.json({ token, qq: user.qq, avatar: user.avatar });
 });
 
 // Start QQ Auth
@@ -145,6 +145,7 @@ auth.get('/auth/qq/status', async (c) => {
 			token,
 			is_registered: true,
 			qq: user.qq,
+			avatar: user.avatar,
 		});
 	}
 
