@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { verify } from 'hono/jwt';
+import sharp from 'sharp';
 import type { Bindings, User } from '../types';
 import { errorResp, getHash, JWT_SECRET } from '../utils';
 
@@ -162,21 +163,37 @@ user.put('/user/avatar', async (c) => {
 		return errorResp(c, 400, 'Avatar file required (multipart/form-data key "avatar")');
 	}
 
+	// Initial size check (loose limit before processing)
 	if (file.size > 1024 * 1024 * 5) {
-		// 5MB limit
 		return errorResp(c, 400, 'File too large (max 5MB)');
 	}
 
-	const buffer = await file.arrayBuffer();
-	const hash = await getHash(buffer);
-	const key = `avatar/${hash}`;
-	await c.env.BUCKET.put(key, buffer, {
-		httpMetadata: { contentType: file.type },
-	});
+	try {
+		const buffer = await file.arrayBuffer();
 
-	await c.env.DB.prepare(`UPDATE users SET avatar = ? WHERE username = ?`).bind(hash, username).run();
+		// Process image: Resize to 640x640 (cover) and convert to WebP
+		const processedBuffer = await sharp(buffer).resize(640, 640, { fit: 'cover' }).webp().toBuffer();
 
-	return c.json({ key: hash });
+		// Validate processed size (<= 150 KiB)
+		if (processedBuffer.length > 150 * 1024) {
+			// Optional: Could retry with lower quality here, but for now rejecting
+			return errorResp(c, 400, 'Processed image too large (>150KiB). Please use a simpler image.');
+		}
+
+		const hash = await getHash(processedBuffer);
+		const key = `avatar/${hash}`;
+
+		await c.env.BUCKET.put(key, processedBuffer, {
+			httpMetadata: { contentType: 'image/webp' },
+		});
+
+		await c.env.DB.prepare(`UPDATE users SET avatar = ? WHERE username = ?`).bind(hash, username).run();
+
+		return c.json({ key: hash });
+	} catch (e) {
+		console.error('Image processing failed', e);
+		return errorResp(c, 500, 'Failed to process image');
+	}
 });
 
 export default user;
