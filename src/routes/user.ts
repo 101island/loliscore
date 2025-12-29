@@ -169,6 +169,10 @@ user.put('/user/avatar', async (c) => {
 	}
 
 	try {
+		// 1. Get current avatar before update
+		const currentUser = await c.env.DB.prepare('SELECT avatar FROM users WHERE username = ?').bind(username).first<User>();
+		const oldHash = currentUser?.avatar;
+
 		const buffer = await file.arrayBuffer();
 
 		// Process image: Resize to 640x640 (cover) and convert to WebP
@@ -183,11 +187,23 @@ user.put('/user/avatar', async (c) => {
 		const hash = await getHash(processedBuffer);
 		const key = `avatar/${hash}`;
 
+		// 2. Upload new avatar
 		await c.env.BUCKET.put(key, processedBuffer, {
 			httpMetadata: { contentType: 'image/webp' },
 		});
 
+		// 3. Update DB
 		await c.env.DB.prepare(`UPDATE users SET avatar = ? WHERE username = ?`).bind(hash, username).run();
+
+		// 4. Delete old avatar if it changed and is unused
+		if (oldHash && oldHash !== hash) {
+			// Check if any other user is using the old avatar
+			const usage = await c.env.DB.prepare('SELECT 1 FROM users WHERE avatar = ?').bind(oldHash).first();
+			if (!usage) {
+				// No one else uses it, delete from R2
+				c.executionCtx.waitUntil(c.env.BUCKET.delete(`avatar/${oldHash}`));
+			}
+		}
 
 		return c.json({ key: hash });
 	} catch (e) {
