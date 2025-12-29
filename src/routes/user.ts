@@ -176,7 +176,7 @@ user.put('/user/avatar', async (c) => {
 
 	await c.env.DB.prepare(`UPDATE users SET avatar = ? WHERE username = ?`).bind(hash, username).run();
 
-	return c.json({ message: 'Avatar uploaded successfully', key });
+	return c.json({ key: hash });
 });
 
 export default user;
