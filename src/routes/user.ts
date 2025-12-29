@@ -36,60 +36,65 @@ user.get('/users', async (c) => {
 });
 
 // Avatar Proxy
-// Avatar Proxy
 user.get('/user/avatar/:username', async (c) => {
 	const username = c.req.param('username');
-	const user = await c.env.DB.prepare(`SELECT username, qq, avatar FROM users WHERE username = ?`).bind(username).first<User>();
 
-	if (!user) {
-		return errorResp(c, 404, 'User not found');
-	}
+	try {
+		const user = await c.env.DB.prepare(`SELECT username, qq, avatar FROM users WHERE username = ?`).bind(username).first<User>();
 
-	// 1. Try R2 if avatar is set
-	if (user.avatar) {
-		const object = await c.env.BUCKET.get(user.avatar);
-		if (object) {
-			const headers = new Headers();
-			object.writeHttpMetadata(headers);
-			headers.set('etag', object.httpEtag);
-			return new Response(object.body, { headers });
-		}
-	}
-
-	// 2. Fallback to QQ if available (and lazy upload)
-	if (user.qq) {
-		const avatarUrl = `https://q.qlogo.cn/headimg_dl?dst_uin=${user.qq}&spec=640&img_type=jpg`;
-		const resp = await fetch(avatarUrl, {
-			headers: { 'User-Agent': 'Mozilla/5.0' },
-		});
-
-		if (!resp.ok) {
-			return errorResp(c, 502, 'Failed to fetch avatar from QQ');
+		if (!user) {
+			return errorResp(c, 404, 'User not found');
 		}
 
-		// Lazy upload to R2
-		const buffer = await resp.clone().arrayBuffer();
-		const key = `avatars/${username}`;
-		c.executionCtx.waitUntil(
-			(async () => {
-				await c.env.BUCKET.put(key, buffer, {
-					httpMetadata: { contentType: resp.headers.get('Content-Type') || 'image/jpeg' },
-				});
-				await c.env.DB.prepare(`UPDATE users SET avatar = ? WHERE username = ?`).bind(key, username).run();
-			})(),
-		);
+		// Try R2 if avatar is set
+		if (user.avatar) {
+			const object = await c.env.BUCKET.get(user.avatar);
+			if (object) {
+				const headers = new Headers();
+				object.writeHttpMetadata(headers);
+				headers.set('etag', object.httpEtag);
+				return new Response(object.body, { headers });
+			}
+		}
 
-		return new Response(resp.body, {
-			status: 200,
-			headers: {
-				'Content-Type': resp.headers.get('Content-Type') || 'image/jpeg',
-				'Cache-Control': 'public, max-age=3600',
-				'Access-Control-Allow-Origin': '*',
-			},
-		});
+		// Fallback to QQ if available (and lazy upload)
+		if (user.qq) {
+			const avatarUrl = `https://q.qlogo.cn/headimg_dl?dst_uin=${user.qq}&spec=640&img_type=jpg`;
+			const resp = await fetch(avatarUrl, {
+				headers: { 'User-Agent': 'Mozilla/5.0' },
+			});
+
+			if (!resp.ok) {
+				return errorResp(c, 502, 'Failed to fetch avatar from QQ');
+			}
+
+			// Lazy upload to R2
+			const buffer = await resp.clone().arrayBuffer();
+			const key = `avatars/${username}`;
+			c.executionCtx.waitUntil(
+				(async () => {
+					await c.env.BUCKET.put(key, buffer, {
+						httpMetadata: { contentType: resp.headers.get('Content-Type') || 'image/jpeg' },
+					});
+					await c.env.DB.prepare(`UPDATE users SET avatar = ? WHERE username = ?`).bind(key, username).run();
+				})(),
+			);
+
+			return new Response(resp.body, {
+				status: 200,
+				headers: {
+					'Content-Type': resp.headers.get('Content-Type') || 'image/jpeg',
+					'Cache-Control': 'public, max-age=3600',
+					'Access-Control-Allow-Origin': '*',
+				},
+			});
+		}
+
+		return errorResp(c, 404, 'Avatar not found');
+	} catch (e: unknown) {
+		console.error(`Error fetching avatar for ${username}:`, e);
+		return errorResp(c, 500, `Internal Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
 	}
-
-	return errorResp(c, 404, 'Avatar not found');
 });
 
 // Upload Avatar
