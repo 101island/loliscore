@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import auth from './routes/auth';
+import chat from './routes/chat';
 import internal from './routes/internal';
 import user from './routes/user';
 import type { Bindings } from './types';
@@ -30,6 +31,7 @@ app.use(
 
 // Mount routers
 app.route('/api', auth);
+app.route('/api', chat);
 app.route('/api', user);
 app.route('/api/internal/bot', internal);
 
