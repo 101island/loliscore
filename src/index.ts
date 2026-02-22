@@ -12,12 +12,14 @@ app.use(
 	'/*',
 	cors({
 		origin: (origin) => {
+			if (!origin) return 'https://lolisland.us';
 			// Allow production domain
 			if (origin === 'https://lolisland.us') return origin;
+			if (origin === 'https://www.lolisland.us') return origin;
 			// Allow local development
 			if (origin.startsWith('http://localhost:')) return origin;
 			// Allow Cloudflare Pages
-			if (origin.endsWith('.lolisland.pages.dev')) return origin;
+			if (origin.endsWith('.lolisland.pages.dev') || origin.endsWith('.pages.dev')) return origin;
 			// Block others (or return null)
 			return null;
 		},
