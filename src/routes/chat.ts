@@ -15,6 +15,16 @@ type ChatMessage = {
 	created_at: string;
 };
 
+type ChatMessageOutput = {
+	id: string;
+	username: string;
+	kind: 'text' | 'image';
+	content: string;
+	imageKey: string | null;
+	createdMs: number;
+	createdAt: string;
+};
+
 const IMAGE_KEY_PATTERN = /^[a-z0-9][a-z0-9._-]{5,120}$/;
 const EMOJI_PATTERN = /^\[\[\[([^:\]]+):([^\]]+)\]\]\]$/;
 
@@ -35,6 +45,16 @@ const resolveUsername = async (token: string) => {
 	return payload.user_id;
 };
 
+const mapChatMessage = (row: ChatMessage): ChatMessageOutput => ({
+	id: row.id,
+	username: row.username,
+	kind: row.kind === 'image' ? 'image' : 'text',
+	content: row.content,
+	imageKey: row.image_key,
+	createdMs: row.created_ms,
+	createdAt: row.created_at,
+});
+
 chat.get('/chat/messages', async (c) => {
 	await ensureChatSchema(c.env.DB);
 
@@ -52,17 +72,88 @@ chat.get('/chat/messages', async (c) => {
 				).bind(limit);
 
 	const result = await query.all<ChatMessage>();
-	const messages = result.results.map((row) => ({
-		id: row.id,
-		username: row.username,
-		kind: row.kind === 'image' ? 'image' : 'text',
-		content: row.content,
-		imageKey: row.image_key,
-		createdMs: row.created_ms,
-		createdAt: row.created_at,
-	}));
+	const messages = result.results.map(mapChatMessage);
 
 	return c.json({ messages: messages.reverse() });
+});
+
+chat.get('/chat/stream', async (c) => {
+	await ensureChatSchema(c.env.DB);
+
+	let since = Number(c.req.query('since') || '0');
+	if (!Number.isFinite(since) || since < 0) since = 0;
+
+	const encoder = new TextEncoder();
+	let closed = false;
+	let pollTimer: ReturnType<typeof setInterval> | null = null;
+	let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+	const stream = new ReadableStream<Uint8Array>({
+		start(controller) {
+			const sendEvent = (event: string, payload: unknown) => {
+				if (closed) return;
+				controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`));
+			};
+
+			const sendPing = () => {
+				if (closed) return;
+				controller.enqueue(encoder.encode(': ping\n\n'));
+			};
+
+			const closeStream = () => {
+				if (closed) return;
+				closed = true;
+				if (pollTimer) clearInterval(pollTimer);
+				if (heartbeatTimer) clearInterval(heartbeatTimer);
+				try {
+					controller.close();
+				} catch {}
+			};
+
+			const queryUpdates = async () => {
+				if (closed) return;
+				try {
+					const result = await c.env.DB.prepare(
+						'SELECT id, username, kind, content, image_key, created_ms, created_at FROM chat_messages WHERE created_ms > ? ORDER BY created_ms ASC LIMIT 50',
+					)
+						.bind(since)
+						.all<ChatMessage>();
+
+					if (result.results.length === 0) return;
+
+					const messages = result.results.map(mapChatMessage);
+					since = messages[messages.length - 1].createdMs;
+					sendEvent('messages', { messages });
+				} catch {
+					closeStream();
+				}
+			};
+
+			sendEvent('ready', { now: Date.now() });
+			void queryUpdates();
+
+			pollTimer = setInterval(() => {
+				void queryUpdates();
+			}, 1500);
+
+			heartbeatTimer = setInterval(sendPing, 20000);
+
+			c.req.raw.signal.addEventListener('abort', closeStream, { once: true });
+		},
+		cancel() {
+			closed = true;
+			if (pollTimer) clearInterval(pollTimer);
+			if (heartbeatTimer) clearInterval(heartbeatTimer);
+		},
+	});
+
+	return new Response(stream, {
+		headers: {
+			'Content-Type': 'text/event-stream; charset=utf-8',
+			'Cache-Control': 'no-cache, no-transform',
+			Connection: 'keep-alive',
+		},
+	});
 });
 
 chat.post('/chat/messages', async (c) => {
