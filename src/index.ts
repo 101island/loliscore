@@ -23,7 +23,7 @@ app.use(
 			// Block others (or return null)
 			return null;
 		},
-		allowHeaders: ['Content-Type', 'Authorization', 'X-Custom-Header'],
+		allowHeaders: ['Content-Type', 'Authorization', 'X-Custom-Header', 'Cache-Control'],
 		allowMethods: ['POST', 'GET', 'OPTIONS', 'DELETE', 'PUT'],
 		exposeHeaders: ['Content-Length'],
 		maxAge: 600,
