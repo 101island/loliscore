@@ -1,6 +1,5 @@
 import { Hono } from 'hono';
 import { verify } from 'hono/jwt';
-import sharp from 'sharp';
 import type { Bindings, User } from '../types';
 import { errorResp, getHash, JWT_SECRET } from '../utils';
 
@@ -175,21 +174,17 @@ user.put('/user/avatar', async (c) => {
 
 		const buffer = await file.arrayBuffer();
 
-		// Process image: Resize to 640x640 (cover) and convert to WebP
-		const processedBuffer = await sharp(buffer).resize(640, 640, { fit: 'cover' }).webp().toBuffer();
-
-		// Validate processed size (<= 150 KiB)
-		if (processedBuffer.length > 150 * 1024) {
-			// Optional: Could retry with lower quality here, but for now rejecting
-			return errorResp(c, 400, 'Processed image too large (>150KiB). Please use a simpler image.');
+		// Keep upload path worker-compatible without native sharp
+		if (buffer.byteLength > 300 * 1024) {
+			return errorResp(c, 400, 'Image too large (>300KiB). Please upload a smaller image.');
 		}
 
-		const hash = await getHash(processedBuffer);
+		const hash = await getHash(buffer);
 		const key = `avatar/${hash}`;
 
 		// 2. Upload new avatar
-		await c.env.BUCKET.put(key, processedBuffer, {
-			httpMetadata: { contentType: 'image/webp' },
+		await c.env.BUCKET.put(key, buffer, {
+			httpMetadata: { contentType: file.type || 'application/octet-stream' },
 		});
 
 		// 3. Update DB
@@ -207,8 +202,8 @@ user.put('/user/avatar', async (c) => {
 
 		return c.json({ key: hash });
 	} catch (e) {
-		console.error('Image processing failed', e);
-		return errorResp(c, 500, 'Failed to process image');
+		console.error('Image upload failed', e);
+		return errorResp(c, 500, 'Failed to upload image');
 	}
 });
 
