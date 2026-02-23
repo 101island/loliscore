@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { verify } from 'hono/jwt';
 import type { Bindings } from '../types';
 import { errorResp, JWT_SECRET } from '../utils';
@@ -27,6 +27,7 @@ type ChatMessageOutput = {
 
 const IMAGE_KEY_PATTERN = /^[a-z0-9][a-z0-9._-]{5,120}$/;
 const EMOJI_PATTERN = /^\[\[\[([^:\]]+):([^\]]+)\]\]\]$/;
+const MAX_IMAGE_BYTES = 512 * 1024;
 
 const ensureChatSchema = async (db: D1Database) => {
 	await db
@@ -209,6 +210,42 @@ chat.post('/chat/messages', async (c) => {
 	});
 });
 
+const deleteOwnMessage = async (c: Context<{ Bindings: Bindings }>) => {
+	const authHeader = c.req.header('Authorization');
+	if (!authHeader) return errorResp(c, 401, 'Authorization header required');
+
+	const token = authHeader.replace('Bearer ', '').trim();
+	let username = '';
+	try {
+		username = await resolveUsername(token);
+	} catch {
+		return errorResp(c, 401, 'Invalid token');
+	}
+
+	await ensureChatSchema(c.env.DB);
+
+	const messageId = c.req.param('id').trim();
+	if (!messageId) return errorResp(c, 400, 'Message id is required');
+
+	const row = await c.env.DB.prepare('SELECT username, image_key FROM chat_messages WHERE id = ? LIMIT 1')
+		.bind(messageId)
+		.first<{ username: string; image_key: string | null }>();
+
+	if (!row) return errorResp(c, 404, 'Message not found');
+	if (row.username !== username) return errorResp(c, 403, 'Cannot withdraw this message');
+
+	await c.env.DB.prepare('DELETE FROM chat_messages WHERE id = ? AND username = ?').bind(messageId, username).run();
+
+	if (row.image_key && IMAGE_KEY_PATTERN.test(row.image_key)) {
+		c.executionCtx.waitUntil(c.env.BUCKET.delete(`chat/${row.image_key}`));
+	}
+
+	return c.json({ ok: true });
+};
+
+chat.delete('/chat/messages/:id', deleteOwnMessage);
+chat.post('/chat/messages/:id/withdraw', deleteOwnMessage);
+
 const extensionFromType = (type: string) => {
 	if (type === 'image/png') return 'png';
 	if (type === 'image/gif') return 'gif';
@@ -233,8 +270,8 @@ chat.post('/chat/images', async (c) => {
 	if (!(file instanceof File)) {
 		return errorResp(c, 400, 'Image file required (multipart/form-data key "image")');
 	}
-	if (!file.type.startsWith('image/')) return errorResp(c, 400, 'Unsupported file type');
-	if (file.size > 5 * 1024 * 1024) return errorResp(c, 400, 'Image is too large');
+	if (file.type !== 'image/webp') return errorResp(c, 400, 'Only webp image is allowed');
+	if (file.size > MAX_IMAGE_BYTES) return errorResp(c, 400, 'Image is too large (max 512KiB)');
 
 	const ext = extensionFromType(file.type);
 	const key = `${Date.now()}-${crypto.randomUUID().replaceAll('-', '')}.${ext}`;
